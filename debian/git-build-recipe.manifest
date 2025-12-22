@@ -1,0 +1,3 @@
+# git-build-recipe format 0.4 deb-version {debversion}-202512221436~1808ecb42
+lp:~elmer-csc-ubuntu/elmercsc/+git/elmer-github-devel git-commit:1808ecb4236d28372aeb04ab39da3c32b85685cf
+nest-part packaging lp:~elmer-csc-ubuntu/elmercsc/+git/packaging-ubuntu noble debian git-commit:08f24cfe4639464711e07bb6f5d3c6847c28e0d5

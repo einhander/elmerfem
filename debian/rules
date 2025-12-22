@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+
+BUILDDIR = build
+
+# secondly called by launchpad
+#
+
+
+binary-arch: build
+	cd $(BUILDDIR); cmake -P cmake_install.cmake
+	mkdir debian/tmp/DEBIAN
+	dpkg-gencontrol -pelmerfem-csc
+	dpkg --build debian/tmp ..
+
+build:
+	mkdir $(BUILDDIR);
+	cd $(BUILDDIR); cmake -C ../debian/buildopts_debian.cmake -DCMAKE_INSTALL_PREFIX=../debian/tmp/usr ..
+	make -j4 -C $(BUILDDIR)
+
+build-indep: ;
+
+build-arch: build ;
+
+# thirdly called by launchpad
+binary: binary-indep binary-arch
+
+binary-indep: ;
+
+# firstly called by launchpad
+clean:
+	rm -rf build
+	rm -rf $(BUILDDIR)
+	rm -rf debian/tmp
+
+.PHONY: binary binary-arch binary-indep build-indep build-arch clean

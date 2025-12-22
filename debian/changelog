@@ -1,0 +1,12 @@
+elmerfem-csc (9.0) noble; urgency=low
+
+  * Auto build.
+
+ -- Launchpad Package Builder <noreply@launchpad.net>  Mon, 22 Dec 2025 14:36:59 +0000
+
+elmerfem-csc (9.0-0ppa0) noble; urgency=low
+
+  * Set version to 9.0
+  * Full release notes at https://github.com/ElmerCSC/elmerfem/blob/release-9.0/ReleaseNotes/release_9.0.md
+
+ -- elmer admin <elmeradm@csc.fi>  Thu, 06 Apr 2023 00:00:00 +0000
