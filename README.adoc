@@ -1,3 +1,9 @@
+Repo for debian packages.
+`debuild -uc -us` should work.
+
+
+Original readme:
+
 :imagesdir: pics
 [.text-center]
 image::ElmerLogoPlain64x64.png[float="right"]
