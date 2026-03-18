@@ -122,7 +122,7 @@ CONTAINS
 
    FUNCTION GetVersion() RESULT(ch)
      CHARACTER(LEN=:), ALLOCATABLE :: ch
-     ch = VERSION
+     ch = ELMER_FEM_VERSION
    END FUNCTION GetVersion
 
    FUNCTION GetSifName(Found) RESULT(ch)
@@ -134,8 +134,8 @@ CONTAINS
    FUNCTION GetRevision(Found) RESULT(ch)
      CHARACTER(LEN=:), ALLOCATABLE :: ch
      LOGICAL, OPTIONAL :: Found
-#ifdef REVISION
-     ch = REVISION
+#ifdef ELMER_FEM_REVISION
+     ch = ELMER_FEM_REVISION
      IF(PRESENT(Found)) Found = .TRUE.
 #else
      ch = "unknown"
@@ -143,11 +143,23 @@ CONTAINS
 #endif
    END FUNCTION GetRevision
 
+   FUNCTION GetBranch(Found) RESULT(ch)
+     CHARACTER(LEN=:), ALLOCATABLE :: ch
+     LOGICAL, OPTIONAL :: Found
+#ifdef ELMER_FEM_BRANCH
+     ch = ELMER_FEM_BRANCH
+     IF(PRESENT(Found)) Found = .TRUE.
+#else
+     ch = "unknown"
+     IF(PRESENT(Found)) Found = .FALSE.
+#endif
+   END FUNCTION GetBranch
+
    FUNCTION GetCompilationDate(Found) RESULT(ch)
      CHARACTER(LEN=:), ALLOCATABLE :: ch
      LOGICAL, OPTIONAL :: Found
-#ifdef COMPILATIONDATE
-     ch = COMPILATIONDATE
+#ifdef ELMER_FEM_COMPILATIONDATE
+     ch = ELMER_FEM_COMPILATIONDATE
      IF(PRESENT(Found)) Found = .TRUE.
 #else
      ch = "unknown"
@@ -4038,6 +4050,7 @@ CONTAINS
     
     ! Combine the individual projectors into one massive projector
     CALL GenerateConstraintMatrix( CurrentModel, Solver )
+    CALL GenerateAddMatrix( CurrentModel, Solver )
     
     IF( GetLogical(Params,'Linear System Solver Disabled',Found) ) THEN
       CALL Info('DefaultSolve','Solver disabled, exiting early!',Level=10)
@@ -5720,14 +5733,15 @@ CONTAINS
      INTEGER :: FDofMap(6,4)
      INTEGER :: i, j, k, kk, l, m, n, nd, nb, np, mb, nn, ni, nj, i0
      INTEGER :: NDOFs, EDOFs, FDOFs, DOF, local, numEdgeDofs, istat, n_start, Offset
-     INTEGER :: ActiveFaceId
+     INTEGER :: ActiveFaceId, BasisDegree
 
      LOGICAL :: ReverseSign(6)
      LOGICAL :: Flag,Found, ConstantValue, ScaleSystem, DirichletComm
-     LOGICAL :: PiolaTransform, QuadraticApproximation, SecondKindBasis
+     LOGICAL :: PiolaTransform, SecondKindBasis
      LOGICAL, ALLOCATABLE :: ReleaseDir(:)
      LOGICAL :: ReleaseAny, NodalBCsWithBraces,AllConstrained
      LOGICAL :: CheckRight, AugmentedEigenSystem
+     LOGICAL :: SimplicialElements
      
      CHARACTER(:), ALLOCATABLE :: Name
 
@@ -6227,8 +6241,9 @@ CONTAINS
      ! Set Dirichlet BCs for edge and face dofs which arise from approximating with
      ! edge (curl-conforming) or face (div-conforming) elements:
      ! ----------------------------------------------------------------------------
-     QuadraticApproximation = ListGetLogical(Params, 'Quadratic Approximation', Found)
-     SecondKindBasis = ListGetLogical(Params, 'Second Kind Basis', Found)
+     CALL EdgeElementStyle(Params, PiolaTransform, SecondKindBasis, BasisDegree = BasisDegree)
+     SimplicialElements = ListGetLogical(Params, 'Simplicial Mesh', Found)
+     
      DO DOF=1,x % DOFs
         name = TRIM(x % name)
         IF (x % DOFs>1) name=ComponentName(name,DOF)
@@ -6300,7 +6315,8 @@ CONTAINS
 
                    n = Edge % TYPE % NumberOfNodes
                    CALL VectorElementEdgeDOFs(BC,Edge,n,Parent,np,Name//' {e}',Work, &
-                       EDOFs, SecondKindBasis, QuadraticApproximation = QuadraticApproximation)
+                       EDOFs, SecondKindBasis, BasisDegree = BasisDegree, &
+                       SimplicialMesh = SimplicialElements)
 
                    n=GetElementDOFs(gInd,Edge)
 
@@ -6347,7 +6363,8 @@ CONTAINS
 
                      CALL VectorElementEdgeDOFs(BC, Edge, n, Parent, np, Name//' {e}', &
                          Work(i0+1:i0+EDOFs), EDOFs, SecondKindBasis, &
-                         QuadraticApproximation = QuadraticApproximation)
+                         BasisDegree = BasisDegree, &
+                         SimplicialMesh = SimplicialElements)
                      
                      n = GetElementDOFs(gInd,Edge)
 
@@ -6380,7 +6397,7 @@ CONTAINS
                      n = Face % TYPE % NumberOfNodes
 
                      CALL SolveLocalFaceDOFs(BC, Face, n, Name//' {e}', Work, EDOFs, &
-                         Face % BDOFs, SecondKindBasis, QuadraticApproximation)
+                         Face % BDOFs, SecondKindBasis, BasisDegree, SimplicialElements)
 
                      Face % BodyId = Parent % BodyId
                      
@@ -6638,7 +6655,7 @@ CONTAINS
 !> v is a polynomial on the edge E, and S reverses sign if necessary.
 !------------------------------------------------------------------------------
   SUBROUTINE VectorElementEdgeDOFs(BC, Element, n, Parent, np, Name, Integral, EDOFs, &
-      SecondFamily, FaceElement, QuadraticApproximation)
+      SecondFamily, FaceElement, BasisDegree, SimplicialMesh)
 !------------------------------------------------------------------------------
     USE ElementDescription, ONLY: GetEdgeMap
     IMPLICIT NONE
@@ -6653,13 +6670,16 @@ CONTAINS
     INTEGER, OPTIONAL :: EDOFs        !< The number of DOFs
     LOGICAL, OPTIONAL :: SecondFamily !< To select the element family
     LOGICAL, OPTIONAL :: FaceElement  !< If .TRUE., e is normal to the edge
-    LOGICAL, OPTIONAL :: QuadraticApproximation 
+    INTEGER, OPTIONAL :: BasisDegree
+    LOGICAL, OPTIONAL :: SimplicialMesh
 !------------------------------------------------------------------------------
     TYPE(Nodes_t), SAVE :: Nodes, Pnodes
     TYPE(ElementType_t), POINTER :: SavedType
     TYPE(GaussIntegrationPoints_t) :: IP
 
-    LOGICAL :: Lstat, ReverseSign, SecondKindBasis, DivConforming, SecondOrder
+    LOGICAL :: Lstat, ReverseSign, SecondKindBasis, DivConforming
+    LOGICAL :: SecondOrder, ThirdOrder
+    LOGICAL :: Simplicial, ErvinStyle = .FALSE.
     INTEGER, POINTER :: Edgemap(:,:)
     INTEGER :: i,j,k,p,DOFs
     INTEGER :: i1,i2,i3
@@ -6677,10 +6697,13 @@ CONTAINS
       END IF
     END IF   
 
-    IF (PRESENT(QuadraticApproximation)) THEN
-      SecondOrder = QuadraticApproximation
+    SecondOrder = .FALSE.
+    ThirdOrder = .FALSE.
+    IF (PRESENT(BasisDegree)) THEN
+      SecondOrder = BasisDegree == 2
+      IF (.NOT. SecondOrder) ThirdOrder = BasisDegree == 3
     ELSE
-      SecondOrder = .FALSE.
+      
     END IF
     
     IF (PRESENT(SecondFamily)) THEN
@@ -6702,6 +6725,12 @@ CONTAINS
       DivConforming = .FALSE.
     END IF
 
+    IF (PRESENT(SimplicialMesh)) THEN
+      Simplicial = SimplicialMesh
+    ELSE
+      Simplicial = .FALSE.
+    END IF
+    
     ! Get the nodes of the boundary and parent elements:
     !CALL GetElementNodes(Nodes, Element)
     !CALL GetElementNodes(PNodes, Parent)
@@ -6762,7 +6791,12 @@ CONTAINS
     END IF
 
     Integral = 0._dp
-    IP = GaussPoints(Element)
+    IF (SecondOrder .AND. SecondKindBasis .OR. ThirdOrder .AND. Simplicial) THEN
+      IP = GaussPoints(Element,3)
+    ELSE
+      IP = GaussPoints(Element)
+    END IF
+
     DO p=1,IP % n
       Lstat = ElementInfo( Element, Nodes, IP % u(p), &
             IP % v(p), IP % w(p), DetJ, Basis )
@@ -6770,35 +6804,55 @@ CONTAINS
 
       L  = SUM(Load(1:n)*Basis(1:n))
       VL = MATMUL(Vload(:,1:n),Basis(1:n))
-
+      
       IF (SecondKindBasis) THEN
         u = IP % u(p)
         IF (SecondOrder) THEN
-          Integral(1)=Integral(1)+sgn*s*(L+SUM(VL*e))
+          Integral(1)=Integral(1)+s*(L+SUM(VL*e))
           v = -3.0d0 * u
-          ! The odd weight function => no sign changes needed in the integration 
-          Integral(2)=Integral(2)+s*(L+SUM(VL*e))*v
+          Integral(2)=Integral(2)+sgn*s*(L+SUM(VL*e))*v
           v = 2.5d0 * (1.0d0 - 3.0d0 * u**2)
-          Integral(3)=Integral(3)+sgn*s*(L+SUM(VL*e))*v
+          Integral(3)=Integral(3)+s*(L+SUM(VL*e))*v
         ELSE
-          v = 0.5d0*(1.0d0-sqrt(3.0d0)*u)
-          Integral(1)=Integral(1)+s*(L+SUM(VL*e))*v
-          v = 0.5d0*(1.0d0+sqrt(3.0d0)*u)
-          Integral(2)=Integral(2)+s*(L+SUM(VL*e))*v
+          IF (ErvinStyle .OR. DivConforming) THEN
+            v = 0.5d0*(1.0d0-sqrt(3.0d0)*u)
+            Integral(1)=Integral(1)+s*(L+SUM(VL*e))*v
+            v = 0.5d0*(1.0d0+sqrt(3.0d0)*u)
+            Integral(2)=Integral(2)+s*(L+SUM(VL*e))*v
+          ELSE
+            Integral(1)=Integral(1)+s*(L+SUM(VL*e))
+            v = -3.0d0 * u
+            Integral(2)=Integral(2)+sgn*s*(L+SUM(VL*e))*v
+          END IF
         END IF
       ELSE
-        Integral(1)=Integral(1)+s*(L+SUM(VL*e))
-
-        IF (.NOT. DivConforming) THEN
-          ! This branch is concerned with the second-order curl-conforming elements
-          IF (DOFs>1) THEN
-            v = Basis(2)-Basis(1)
-            ! The parent element must define the default for the positive tangent associated
-            ! with the edge. Thus, if the boundary element handled has an opposite orientation, 
-            ! the sign must be reversed to get the positive coordinate associated with the
-            ! parent element edge.
-            IF (ReverseSign) v = -1.0d0*v
-            Integral(2)=Integral(2)+s*(L+SUM(VL*e))*v
+        u = IP % u(p)
+        IF (ThirdOrder .AND. Simplicial) THEN
+          ! This is the same as the case of second-kind basis of degree 2
+          ! TO DO: restructure to avoid repetition
+          Integral(1)=Integral(1)+s*(L+SUM(VL*e))
+          v = -3.0d0 * u
+          Integral(2)=Integral(2)+sgn*s*(L+SUM(VL*e))*v
+          v = 2.5d0 * (1.0d0 - 3.0d0 * u**2)
+          Integral(3)=Integral(3)+s*(L+SUM(VL*e))*v          
+        ELSE IF (SecondOrder .AND. Simplicial) THEN
+          ! This is analogous to the case of second-kind basis
+          Integral(1)=Integral(1)+s*(L+SUM(VL*e))
+          v = -3.0d0 * u
+          Integral(2)=Integral(2)+sgn*s*(L+SUM(VL*e))*v
+        ELSE
+          Integral(1)=Integral(1)+s*(L+SUM(VL*e))
+          IF (.NOT. DivConforming) THEN
+            ! This branch is concerned with the second-order curl-conforming elements
+            IF (DOFs>1) THEN
+              v = Basis(2)-Basis(1)
+              ! The parent element must define the default for the positive tangent associated
+              ! with the edge. Thus, if the boundary element handled has an opposite orientation, 
+              ! the sign must be reversed to get the positive coordinate associated with the
+              ! parent element edge.
+              IF (ReverseSign) v = -1.0d0*v
+              Integral(2)=Integral(2)+s*(L+SUM(VL*e))*v
+            END IF
           END IF
         END IF
       END IF
@@ -6818,8 +6872,12 @@ CONTAINS
           Integral(1)=-Integral(1)
           Integral(3)=-Integral(3)
         ELSE
-          Integral(1)=-Integral(1)
-          Integral(2)=-Integral(2)
+          IF (ErvinStyle .OR. DivConforming) THEN
+            Integral(1)=-Integral(1)
+            Integral(2)=-Integral(2)
+          ELSE
+            Integral(1)=-Integral(1)
+          END IF
         END IF
       ELSE
         Integral(1)=-Integral(1)
@@ -6838,7 +6896,7 @@ CONTAINS
 !> the values of the DOFs associated with edges are given.
 !------------------------------------------------------------------------------
   SUBROUTINE SolveLocalFaceDOFs(BC, Element, n, Name, DOFValues, &
-      EDOFs, FDOFs, SecondKindBasis, QuadraticApproximation)
+      EDOFs, FDOFs, SecondKindBasis, BasisDegree, SimplicialMesh)
 !------------------------------------------------------------------------------
     IMPLICIT NONE
 
@@ -6850,26 +6908,27 @@ CONTAINS
     INTEGER :: EDOFs                     !< The number of edge DOFs
     INTEGER :: FDOFs                     !< The number of face DOFs
     LOGICAL :: SecondKindBasis           !< Use Nedelec's second family 
-    LOGICAL :: QuadraticApproximation    !< Use second-order edge element basis
+    INTEGER :: BasisDegree               !< The polynomial order of basis
+    LOGICAL, OPTIONAL :: SimplicialMesh
 !------------------------------------------------------------------------------
     TYPE(Nodes_t), SAVE :: Nodes
     TYPE(GaussIntegrationPoints_t) :: IP
 
-    LOGICAL :: Lstat
+    LOGICAL :: Lstat, Simplicial
 
-    INTEGER :: i,j,p,DOFs,BasisDegree
+    INTEGER :: i,j,p,DOFs
 
     REAL(KIND=dp) :: Basis(n),Vload(3,n),VL(3),Normal(3)
     REAL(KIND=dp) :: EdgeBasis(EDOFs+FDOFs,3)
     REAL(KIND=dp) :: Mass(FDOFs,FDOFs), Force(FDOFs)
     REAL(KIND=dp) :: v,s,DetJ
 !------------------------------------------------------------------------------
-    IF (QuadraticApproximation) THEN
-      BasisDegree = 2
+    IF (PRESENT(SimplicialMesh)) THEN
+      Simplicial = SimplicialMesh
     ELSE
-      BasisDegree = 1
+      Simplicial = .FALSE.
     END IF
-      
+    
     Mass = 0.0d0
     Force = 0.0d0
 
@@ -6883,12 +6942,14 @@ CONTAINS
     VLoad(2,1:n)=GetReal(BC,Name(1:i)//' 2',Lstat,element)
     VLoad(3,1:n)=GetReal(BC,Name(1:i)//' 3',Lstat,element)
 
-    IP = GaussPoints(Element)
+    IP = GaussPoints(Element, PReferenceElement=.TRUE., EdgeBasisDegree=BasisDegree)
+    
     DO p=1,IP % n
 
       Lstat = EdgeElementInfo( Element, Nodes, IP % u(p), IP % v(p), IP % w(p), &
           DetF=DetJ, Basis=Basis, EdgeBasis=EdgeBasis, SecondFamily = SecondKindBasis, &
-          BasisDegree=BasisDegree, ApplyPiolaTransform=.TRUE., TangentialTrMapping=.TRUE.)
+          BasisDegree=BasisDegree, ApplyPiolaTransform=.TRUE., TangentialTrMapping=.TRUE., &
+          SimplicialMesh=Simplicial )
 
       Normal = NormalVector(Element, Nodes, IP % u(p), IP % v(p), .FALSE.)
 

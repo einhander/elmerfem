@@ -42,7 +42,7 @@ MODULE BlockSolve
      BackScaleLinearSystem, AMGXMatrixVectorMultiply, AMGXSolver, DiagonalMatrixSumming, &
      StructureCouplingAssembly, FSICouplingAssembly, SaveLinearSystem, &
      MassMatrixAssembly, VectorValuesRange, LaplaceMatrixAssembly
- USE MeshUtils, ONLY : SaveProjector   
+ USE MortarUtils, ONLY : SaveProjector   
  USE DefUtils, ONLY : DefaultSolve, GetElementDOFs, GetElementNodes, GetLogical
  
  IMPLICIT NONE
@@ -193,8 +193,8 @@ CONTAINS
       MaxFDOFs  = MAX( MaxFDOFs,  Element % BDOFs )
     END DO
     
-    GlobalBubbles = ListGetLogical( Params, 'Bubbles in Global System', Found )
-    IF (.NOT.Found) GlobalBubbles = .TRUE.
+    ! Inherit the bubbles from primary solver
+    GlobalBubbles = Solver % GlobalBubbles
     
     Ndeg = Ndeg + Mesh % NumberOfNodes
     IF ( MaxEDOFs > 0 ) Ndeg = Ndeg + MaxEDOFs * Mesh % NumberOFEdges
@@ -1778,7 +1778,7 @@ CONTAINS
 
 
   !-------------------------------------------------------------------------------------
-  !> Makes a quadratic H(curl) approximation to have a block structure
+  !> Makes a H(curl) approximation to have a block structure
   !-------------------------------------------------------------------------------------
   SUBROUTINE BlockPickMatrixHcurl( Solver, NoVar, DoCmplx, BlockTag )
 
@@ -1791,7 +1791,7 @@ CONTAINS
     TYPE(Matrix_t), POINTER :: A,B
     TYPE(Mesh_t), POINTER :: Mesh
     TYPE(Element_t), POINTER :: Element, Edge
-    LOGICAL :: Found, SecondFamily, PickSimplest
+    LOGICAL :: Found, SecondFamily, SecondOrder, PickSimplest
     
     Mesh => Solver % Mesh
 
@@ -1801,17 +1801,23 @@ CONTAINS
     IF(.NOT. ASSOCIATED( Mesh % Faces ) ) THEN
       CALL Fatal('BlockPickMatrixHcurl','This subroutine needs Faces!')
     END IF        
-    CALL Info('BlockPickMatrixHcurl','Arranging a quadratic H(curl) approximation into blocks',Level=10)
+    CALL Info('BlockPickMatrixHcurl','Arranging a H(curl) approximation into blocks',Level=10)
 
     SecondFamily = ListGetLogical( Solver % Values,'Second Kind Basis',Found )
     IF (SecondFamily) THEN
-      EDOFs = 3
-      IF (ListGetLogical(Solver % Values, 'Block Quadratic Hcurl Pick Simplest', Found)) THEN
-        ! To select DOFs corresponding to the lowest-order basis of the first kind
+      SecondOrder = ListGetLogical( Solver % Values,'Quadratic Approximation',Found )
+      IF (.NOT. SecondOrder) THEN
+        EDOFs = 2
         EDOFs_Order1 = 1
       ELSE
-        ! To select DOFs corresponding to the lowest-order basis of the second kind
-        EDOFs_Order1 = 2
+        EDOFs = 3
+        IF (ListGetLogical(Solver % Values, 'Block Quadratic Hcurl Pick Simplest', Found)) THEN
+          ! To select DOFs corresponding to the lowest-order basis of the first kind
+          EDOFs_Order1 = 1
+        ELSE
+          ! To select DOFs corresponding to the lowest-order basis of the second kind
+          EDOFs_Order1 = 2
+        END IF
       END IF
     ELSE
       EDOFs = 2
@@ -4074,7 +4080,8 @@ CONTAINS
       
       ! If this was a special preconditioning matrix then update the solution in the scaled system. 
       IF( DoPrecScaling ) THEN
-        x(1:n) = x(1:n) / diagtmp(1:n)
+        ! This tentatively fixes the issues introduced scaling in May 2025 that made the outer iteration converge slower. 
+        x(1:n) = x(1:n) / ( diagtmp(1:n) * Solver % Matrix % RhsScaling )
         DEALLOCATE( btmp, diagtmp )
       ELSE IF( NoNestedScaling ) THEN
         CALL ListAddLogical( Params,'Linear System Skip Scaling',.FALSE.)
@@ -5035,7 +5042,8 @@ CONTAINS
 
     ! Different strategies on how to split the initial monolithic matrix into blocks
     BlockAV = ListGetLogical( Params,'Block A-V System', GotIt)
-    BlockHcurl = ListGetLogical( Params,'Block Quadratic Hcurl System', GotIt)   
+    BlockHcurl = ListGetLogical( Params,'Block Hcurl System', GotIt) .OR. &
+        ListGetLogical( Params,'Block Quadratic Hcurl System', GotIt)   
     BlockHdiv = ListGetLogical( Params,'Block Hdiv system',GotIt)
     BlockReIm = ListGetLogical( Params,'Block Re-Im system',GotIt)
     BlockNodal = ListGetLogical( Params,'Block Nodal System', GotIt)

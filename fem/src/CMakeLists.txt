@@ -29,7 +29,8 @@ SET(solverlib_SOURCES AddrFunc.F90 NavierStokes.F90 NavierStokesGeneral.F90
   ElementUtils.F90 Radiation.F90 fft.c Load.c Differentials.F90
   FreeSurface.F90 
   Walls.F90 SolverUtils.F90 SolveSBand.F90 CPUTime.c Interpolation.F90
-  MainUtils.F90 Adaptive.F90 EigenSolve.F90 HashTable.F90
+  MainUtils.F90 Adaptive.F90 EigenSolve.F90 HashTable.F90 MortarUtils.F90
+  MeshAllocations.F90 GeometryFitting.F90
   MeshUtils.F90 SaveUtils.F90 SParIterGlobals.F90 SParIterComm.F90
   SParIterPrecond.F90 SParIterSolver.F90 Messages.F90 Multigrid.F90
   Smoothers.F90 ClusteringMethods.F90 ParallelUtils.F90
@@ -68,6 +69,10 @@ ENDIF()
 IF(HAVE_FETI4I)
   LIST(APPEND solverlib_SOURCES ${FETI4I_INTERFACE_SOURCE})
 ENDIF()
+
+IF(HAVE_ADIOS2)
+  LIST(APPEND solverlib_SOURCES ADIOS2Utils.F90)
+ENDIF(HAVE_ADIOS2)
 
 #FILE(GLOB SRC_FILES *.src)
 #FOREACH(FNAME ${SRC_FILES})
@@ -204,11 +209,22 @@ IF(WITH_LUA)
   LIST(APPEND ELMERSOLVER_LIBRARIES ${LUA_LIBRARIES})
 ENDIF()
 
+IF(HAVE_ADIOS2)
+  IF(WITH_MPI)
+    TARGET_LINK_LIBRARIES(elmersolver adios2::fortran_mpi adios2::fortran)
+  ELSE()
+    TARGET_LINK_LIBRARIES(elmersolver adios2::fortran)
+  ENDIF()
+ENDIF(HAVE_ADIOS2)
 
 ADD_EXECUTABLE(Solver_TGT Solver.F90)
 SET_TARGET_PROPERTIES(Solver_TGT PROPERTIES OUTPUT_NAME "${ELMERSOLVER_OUTPUT_NAME}")
 
-IF(NOT(WIN32))
+IF(WIN32)
+  # Increase stack size from the default 1 MB to 8 MB.
+  TARGET_LINK_OPTIONS(Solver_TGT PRIVATE
+    $<IF:$<Fortran_COMPILER_ID:MSVC>,/STACK:0x800000,-Wl$<COMMA>--stack$<COMMA>0x800000>)
+ELSE()
   MESSAGE(STATUS " ELMERSOLVER_RPATH_STRING_MOD " ${ELMERSOLVER_RPATH_STRING_MOD})
   MESSAGE(STATUS " ELMERLIB_RPATH_STRING " ${ELMERLIB_RPATH_STRING})
 
@@ -238,6 +254,11 @@ IF(WITH_MPI)
     LIST(APPEND ELMERSOLVER_LIBRARIES Elmer::MPI_C ${Hypre_LIBRARIES})
   ENDIF()
 
+  IF(XIOS_LIBRARIES)
+    # XIOS depends on NetCDF (mandatory) and HDF5 (optional), since linking order matters, XIOS must be added before the other two
+    LIST(APPEND ELMERSOLVER_LIBRARIES ${XIOS_LIBRARIES})
+  ENDIF()
+
   IF(NETCDF_LIBRARIES)
     LIST(APPEND ELMERSOLVER_LIBRARIES ${NETCDF_LIBRARIES})
     IF(PHDF5_LIBRARIES)
@@ -249,10 +270,6 @@ IF(WITH_MPI)
     LIST(APPEND ELMERSOLVER_LIBRARIES ${FETI4I_LIBRARIES})
   ENDIF()
 
-  IF(XIOS_LIBRARIES)
-    LIST(APPEND ELMERSOLVER_LIBRARIES ${XIOS_LIBRARIES})
-  ENDIF()
-   
   # Executable
   TARGET_LINK_LIBRARIES(Solver_TGT Elmer::MPI_Fortran elmersolver ${ELMERSOLVER_LIBRARIES})
 

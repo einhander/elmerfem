@@ -4,23 +4,22 @@
 ! *
 ! *  Copyright 1st April 1995 - , CSC - IT Center for Science Ltd., Finland
 ! * 
-! *  This program is free software; you can redistribute it and/or
-! *  modify it under the terms of the GNU General Public License
-! *  as published by the Free Software Foundation; either version 2
-! *  of the License, or (at your option) any later version.
-! * 
-! *  This program is distributed in the hope that it will be useful,
-! *  but WITHOUT ANY WARRANTY; without even the implied warranty of
-! *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-! *  GNU General Public License for more details.
+! *  This library is free software; you can redistribute it and/or
+! *  modify it under the terms of the GNU Lesser General Public
+! *  License as published by the Free Software Foundation; either
+! *  version 2.1 of the License, or (at your option) any later version.
 ! *
-! *  You should have received a copy of the GNU General Public License
-! *  along with this program (in file fem/GPL-2); if not, write to the 
-! *  Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, 
-! *  Boston, MA 02110-1301, USA.
+! *  This library is distributed in the hope that it will be useful,
+! *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+! *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+! *  Lesser General Public License for more details.
+! * 
+! *  You should have received a copy of the GNU Lesser General Public
+! *  License along with this library (in file ../LGPL-2.1); if not, write 
+! *  to the Free Software Foundation, Inc., 51 Franklin Street, 
+! *  Fifth Floor, Boston, MA  02110-1301  USA
 ! *
 ! *****************************************************************************/
-!
 
 !------------------------------------------------------------------------------
 !> Calculate lumped fields for vector helmholtz type solver.
@@ -371,13 +370,20 @@ CONTAINS
     IF( NodalMode ) THEN
       IP = GaussPoints(Element)
     ELSE
-      IP = GaussPoints(Element, EdgeBasis=.TRUE., PReferenceElement=PiolaVersion)
+      IP = GaussPoints(Element, PReferenceElement=PiolaVersion, EdgeBasisDegree = EdgeBasisDegree)
     END IF
 
     DO t=1,IP % n  
-      
-      stat = ElementInfo( Element, Nodes, IP % U(t), IP % V(t), &
-          IP % W(t), detJ, Basis, dBasisdx )              
+
+      IF( NodalMode ) THEN
+        stat = ElementInfo( Element, Nodes, IP % U(t), IP % V(t), &
+            IP % W(t), detJ, Basis, dBasisdx )
+      ELSE
+        ! We need basis functions defined over the p-reference element
+        stat = ElementInfo( Element, Nodes, IP % U(t), IP % V(t), &
+            IP % W(t), detJ, Basis, dBasisdx, EdgeBasis = Wbasis, &
+            USolver = pSolver )
+      END IF
       weight = IP % s(t) * detJ
 
       B = ListGetElementComplex( ElRobin_h, Basis, Element, Found, GaussPoint = t )
